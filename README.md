@@ -1,3 +1,13 @@
+---
+title: Biomni Workbench
+emoji: 🧬
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+app_file: app.py
+pinned: false
+---
+
 <p align="center">
   <img src="./figs/biomni_logo.png" alt="Biomni Logo" width="600px" />
 </p>
