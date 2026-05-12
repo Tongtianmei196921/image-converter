@@ -1126,14 +1126,28 @@ _GRADIO_LLM_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "source": "Custom",
         "base_url": "https://api.longcat.chat/openai",
         "default_model": "LongCat-Flash-Thinking-2601",
+        "aliases": ["longcat"],
         "models": [
             "LongCat-Flash-Thinking-2601",
+        ],
+    },
+    "DeepSeek": {
+        "source": "Custom",
+        "base_url": "https://api.deepseek.com",
+        "default_model": "deepseek-v4-flash",
+        "aliases": ["deepseek"],
+        "models": [
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "deepseek-chat",
+            "deepseek-reasoner",
         ],
     },
     "Zhipu": {
         "source": "Custom",
         "base_url": "https://open.bigmodel.cn/api/paas/v4/",
         "default_model": "glm-5.1",
+        "aliases": ["zhipu", "glm"],
         "models": [
             "glm-5.1",
             "glm-4.7",
@@ -1154,9 +1168,74 @@ def _gradio_llm_provider_presets() -> dict[str, dict[str, Any]]:
     return {
         name: {
             **profile,
+            "aliases": list(profile.get("aliases", [])),
             "models": list(profile["models"]),
         }
         for name, profile in _GRADIO_LLM_PROVIDER_PRESETS.items()
+    }
+
+
+def _gradio_guess_llm_provider(model_name: str) -> str:
+    normalized_model = (model_name or "").strip().lower()
+    if not normalized_model:
+        return "Custom"
+
+    for provider_name, profile in _GRADIO_LLM_PROVIDER_PRESETS.items():
+        aliases = [provider_name.lower(), *[str(alias).lower() for alias in profile.get("aliases", [])]]
+        if normalized_model in aliases:
+            return provider_name
+
+        if any(normalized_model == candidate.lower() for candidate in profile["models"]):
+            return provider_name
+
+    if normalized_model.startswith("deepseek-"):
+        return "DeepSeek"
+    if normalized_model.startswith("glm-"):
+        return "Zhipu"
+    if "longcat" in normalized_model:
+        return "LongCat"
+    return "Custom"
+
+
+def _gradio_resolve_runtime_llm_settings(
+    provider_name: str,
+    model_name: str = "",
+    base_url: str = "",
+) -> dict[str, str]:
+    presets = _gradio_llm_provider_presets()
+    selected_provider = provider_name if provider_name in presets else "Custom"
+    normalized_model = (model_name or "").strip()
+    normalized_base_url = (base_url or "").strip()
+
+    if selected_provider != "Custom":
+        profile = presets[selected_provider]
+        if not normalized_model:
+            normalized_model = str(profile["default_model"])
+        if not normalized_base_url:
+            normalized_base_url = str(profile["base_url"])
+        return {
+            "provider": selected_provider,
+            "model": normalized_model,
+            "base_url": normalized_base_url,
+        }
+
+    if not normalized_base_url:
+        guessed_provider = _gradio_guess_llm_provider(normalized_model)
+        if guessed_provider != "Custom":
+            profile = presets[guessed_provider]
+            alias_pool = {
+                guessed_provider.lower(),
+                *[str(alias).lower() for alias in profile.get("aliases", [])],
+            }
+            selected_provider = guessed_provider
+            normalized_base_url = str(profile["base_url"])
+            if not normalized_model or normalized_model.lower() in alias_pool:
+                normalized_model = str(profile["default_model"])
+
+    return {
+        "provider": selected_provider,
+        "model": normalized_model,
+        "base_url": normalized_base_url,
     }
 
 
@@ -1167,6 +1246,12 @@ def _gradio_match_llm_provider(model_name: str, base_url: str | None) -> str:
         preset_url = str(profile["base_url"]).strip().rstrip("/")
         if preset_url and normalized_url == preset_url and normalized_model in profile["models"]:
             return provider_name
+    guessed_provider = _gradio_guess_llm_provider(normalized_model)
+    if guessed_provider != "Custom":
+        guessed_profile = _GRADIO_LLM_PROVIDER_PRESETS[guessed_provider]
+        guessed_url = str(guessed_profile["base_url"]).strip().rstrip("/")
+        if guessed_url and normalized_url == guessed_url:
+            return guessed_provider
     return "Custom"
 
 
@@ -1176,11 +1261,16 @@ def _gradio_llm_provider_defaults(
     current_base_url: str = "",
 ) -> dict[str, str]:
     presets = _gradio_llm_provider_presets()
-    selected_provider = provider_name if provider_name in presets else "Custom"
+    resolved = _gradio_resolve_runtime_llm_settings(
+        provider_name,
+        model_name=current_model,
+        base_url=current_base_url,
+    )
+    selected_provider = resolved["provider"]
     profile = presets[selected_provider]
 
-    current_model = (current_model or "").strip()
-    current_base_url = (current_base_url or "").strip()
+    current_model = resolved["model"]
+    current_base_url = resolved["base_url"]
 
     if selected_provider == "Custom":
         model = current_model
@@ -1446,11 +1536,17 @@ class A1:
         base_url: str | None = None,
         api_key: str | None = None,
     ) -> dict[str, str]:
-        resolved_model = (model or "").strip()
+        resolved = _gradio_resolve_runtime_llm_settings(
+            provider_name,
+            model_name=model,
+            base_url=base_url or "",
+        )
+        resolved_provider = resolved["provider"]
+        resolved_model = resolved["model"]
         if not resolved_model:
             raise ValueError("Model name is required.")
 
-        resolved_base_url = (base_url or "").strip()
+        resolved_base_url = resolved["base_url"]
         if not resolved_base_url:
             raise ValueError("Base URL is required for runtime model switching.")
 
@@ -1483,7 +1579,7 @@ class A1:
 
         self.configure()
         return {
-            "provider": provider_name,
+            "provider": resolved_provider,
             "source": "Custom",
             "model": resolved_model,
             "base_url": resolved_base_url,
@@ -4303,6 +4399,25 @@ Each library is listed with its description to help you understand its functiona
                 defaults["base_url"],
             )
 
+        def sync_model_routing_form(provider_name: str, model_value: str, base_url_value: str):
+            defaults = _gradio_llm_provider_form_state(
+                provider_name,
+                current_model=model_value,
+                current_base_url=base_url_value,
+            )
+            return (
+                gr.Dropdown(
+                    choices=list(_gradio_llm_provider_presets().keys()),
+                    value=defaults["provider"],
+                ),
+                gr.Dropdown(
+                    choices=defaults["model_choices"],
+                    value=defaults["model"],
+                    allow_custom_value=True,
+                ),
+                defaults["base_url"],
+            )
+
         def render_locale_ui(
             locale: str,
             current_provider: str,
@@ -4559,6 +4674,13 @@ Each library is listed with its description to help you understand its functiona
                     populate_provider_defaults,
                     [provider_selector, model_selector, base_url_selector],
                     [model_selector, base_url_selector],
+                    queue=False,
+                    show_progress="hidden",
+                )
+                model_selector.change(
+                    sync_model_routing_form,
+                    [provider_selector, model_selector, base_url_selector],
+                    [provider_selector, model_selector, base_url_selector],
                     queue=False,
                     show_progress="hidden",
                 )
