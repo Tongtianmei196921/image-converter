@@ -1,0 +1,20 @@
+name: Sync to Hugging Face Hub
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: huggingface/hub-sync@v0.1.0
+        with:
+          github_repo_id: Tongtianmei196921/image-converter
+          huggingface_repo_id: Qiangaoqing/biomni-workbench
+          repo_type: space
+          space_sdk: gradio
+          hf_token: ${{ secrets.HF_TOKEN }}
